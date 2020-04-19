@@ -1,0 +1,234 @@
+library(utils)
+library(tidyverse)
+
+#How many days to be predicted 
+a = 180
+
+#DATA IMPORT
+#read the Dataset sheet into “R”. The dataset will be called "data".
+data <- read.csv("https://opendata.ecdc.europa.eu/covid19/casedistribution/csv", 
+                 na.strings = "", fileEncoding = "UTF-8-BOM")
+
+#DATA PREPARATION
+#seperate the data countrywise and create dataset for India
+data_split <- split(data, data$countriesAndTerritories)
+data_india <- data_split$India
+
+#create log of number of cases into seperate column
+data_india1 <- transform(data_india, LogCases=log(cases))
+
+#sort the dataframe w.r.t.o dates
+data_india2 <- data_india1[order(as.Date(data_india1$dateRep, format="%d/%m/%Y")),]
+data_india2$ID <- seq.int(nrow(data_india2))
+cumInfection = cumsum(data_india2$cases)
+logcumInfection = log(cumInfection)
+India <- data.frame(data_india2$ID,data_india2$dateRep, data_india2$cases, data_india2$LogCases, cumInfection, logcumInfection)
+colnames(India) <- c("Time","Date","Infections","LogInfections","CumInfection","LogCumInfection")
+
+#replace the infinity values to zero
+India$LogInfections[India$LogInfections == "-Inf"] <- 0
+India$LogCumInfection[India$LogCumInfection == "-Inf"] <- 0
+
+#DATA ANALYSIS 1 (simple linear regression)
+##linear regression model of infection with time
+linearmod <- lm(formula = CumInfection ~ Time, data = India)
+summary(linearmod)
+confint(linearmod)
+
+#all date you are interested in, 106 days with observations, 74 days for prediction, so total 180 days
+all_date <- seq(1,a)
+
+#since data is dynamic (i.e., every day new cases are added). This increases the number of rows every day
+b = nrow(India)
+c = a-b
+
+#build predict dataframe
+dfuture<-data.frame(Time=seq(c,a), by=1, length.out = 10)
+
+#predict the future
+predict(linearmod, dfuture, interval = "prediction")
+
+#compute confidence bands (for all data)
+pred.c <- predict(linearmod, data.frame(Time=all_date), interval="confidence")
+
+#PLOT THE LM MODEL
+#set up regression plot (plot nothing here; only set up range, axis)
+ylim <- range(pred.c,India$CumInfection)
+plot(1:nrow(pred.c), numeric(nrow(pred.c)), col = "white", ylim = ylim,
+     xaxt = "n", xlab = "Days from Beginning (December 31, 2019 is the first day ) ", 
+     ylab = "No of COVID-19 Affected Cases in India",
+     main = "Regression Plot")
+axis(1, at = 1:nrow(pred.c), labels = all_date)
+
+#shade 95%-level confidence region
+polygon(c(1:nrow(pred.c),nrow(pred.c):1), c(pred.c[, 2], rev(pred.c[, 3])),
+        col = "grey", border = NA)
+
+#plot fitted values/lines
+lines(1:nrow(pred.c), pred.c[, 1], lwd = 2, col = 4)
+
+#add 95%-level confidence bands
+lines(1:nrow(pred.c), pred.c[, 2], col = 2, lty = 2, lwd = 2)
+lines(1:nrow(pred.c), pred.c[, 3], col = 2, lty = 2, lwd = 2)
+
+#add original observations on the plot
+points(1:b, (India$CumInfection), pch = 20)
+
+#finally, we add legend
+legend(x = "topleft", legend = c("Obs", "Fitted", "95%-CI"),
+       pch = c(20, NA, NA, NA), lty = c(NA, 1, 2, 3), col = c(1, 4, 2, 3),
+       text.col = c(1, 4, 2, 3), bty = "n")
+
+#DATA ANALYSIS 2 (linear regression with log value of affected cases)
+##linear regression model of log of infections with time
+linearmod1 <- lm(formula = LogCumInfection ~ Time, data = India)
+summary(linearmod1)
+confint(linearmod1)
+
+#predict the future
+predict(linearmod1, dfuture, interval = "prediction")
+
+#compute confidence bands (for all data)
+pred.c1 <- predict(linearmod1, data.frame(Time=all_date), interval="confidence")
+
+#PLOT THE LM MODEL 
+#set up regression plot (plot nothing here; only set up range, axis)
+ylim1 <- range(pred.c1, India$LogCumInfection)
+plot(1:nrow(pred.c1), numeric(nrow(pred.c1)), col = "white", ylim = ylim1,
+     xaxt = "n", xlab = "Days from Beginning (December 31, 2019 is the first day) ", 
+     ylab = "Log value of No of COVID-19 Affected Cases in India",
+     main = "Regression Plot")
+axis(1, at = 1:nrow(pred.c1), labels = all_date)
+
+#shade 95%-level confidence region
+polygon(c(1:nrow(pred.c1),nrow(pred.c1):1), c(pred.c1[, 2], rev(pred.c1[, 3])),
+        col = "grey", border = NA)
+
+#plot fitted values / lines
+lines(1:nrow(pred.c1), pred.c1[, 1], lwd = 2, col = 4)
+
+#add 95%-level confidence bands
+lines(1:nrow(pred.c1), pred.c1[, 2], col = 2, lty = 2, lwd = 2)
+lines(1:nrow(pred.c1), pred.c1[, 3], col = 2, lty = 2, lwd = 2)
+
+#add original observations on the plot
+points(1:b, (India$LogCumInfection), pch = 20)
+
+#finally, we add legend
+legend(x = "topleft", legend = c("Obs", "Fitted", "95%-CI"),
+       pch = c(20, NA, NA, NA), lty = c(NA, 1, 2, 3), col = c(1, 4, 2, 3),
+       text.col = c(1, 4, 2, 3), bty = "n")
+
+#DATA ANALYSIS 3 (non linear model)
+##logistic growth model of log of infections with time
+nonlinearmod <- nls(LogCumInfection ~ SSlogis(Time, phi1, phi2, phi3), data = India)
+alpha <- coef(nonlinearmod)
+alpha.c <- confint(nonlinearmod)
+summary(nonlinearmod)
+
+#compute confidence bands (for all data)
+x = seq(1:a)
+y1 = (alpha.c[1,1]/(1 + exp(-(x - alpha.c[2,1])/alpha.c[3,1])))
+y2 = (alpha.c[1,2]/(1 + exp(-(x - alpha.c[2,2])/alpha.c[3,2])))
+x1 <- data.frame(x,y1)
+x2 <- data.frame(x,y2)
+
+#PLOT THE NONLINEAR MODEL
+#set up regression plot and add original observations
+ylim2 <- range(range(x1$y1), range(x2$y2))
+plot(1:nrow(x1), numeric(nrow(x1)), col = "white", ylim = ylim2,
+     xaxt = "n", xlab = "Days from Beginning (December 31, 2019 is the first day) ", 
+     ylab = "Log value of No of COVID-19 Affected Cases in India",
+     main = "Logistic Growth Model")
+axis(1, at = 1:nrow(x1), labels = all_date)
+
+#add 95%-level confidence bands
+curve(alpha.c[1,1]/(1 + exp(-(x - alpha.c[2,1])/alpha.c[3,1])), add = T, col = 2, lty = 2, lwd = 2)
+curve(alpha.c[1,2]/(1 + exp(-(x - alpha.c[2,2])/alpha.c[3,2])), add = T, col = 2, lty = 2, lwd = 2)
+
+#shade 95%-level confidence region
+polygon(c(x1$x,rev(x2$x)),c(x1$y1,rev(x2$y2)),col = "grey", border = NA)
+
+#plot fitted values / lines
+curve(alpha[1]/(1 + exp(-(x - alpha[2])/alpha[3])), add = T, col = "blue", lwd = 2)
+
+#add original observations on the plot
+points(1:b, (India$LogCumInfection), pch = 20)
+
+#finally, we add legend
+legend(x = "topleft", legend = c("Obs", "Fitted", "95%-CI"),
+       pch = c(20, NA, NA, NA), lty = c(NA, 1, 2, 3), col = c(1, 4, 2, 3),
+       text.col = c(1, 4, 2, 3), bty = "n")
+
+#DATA ANALYSIS 4 (linear model by not considering the first two months)
+India1 = India[India$Time > 60,]
+##linear regression model of log of infections with time
+linearmod2 <- lm(formula = LogCumInfection ~ Time, data = India1)
+summary(linearmod2)
+confint(linearmod2)
+
+#predict the future
+predict(linearmod2, dfuture, interval = "prediction")
+
+#compute confidence bands (for all data)
+pred.c3 <- predict(linearmod2, data.frame(Time=all_date), interval="confidence")
+
+#PLOT THE LM MODEL
+#set up regression plot (plot nothing here; only set up range, axis)
+ylim3 <- range(pred.c3)
+plot(1:nrow(pred.c1), numeric(nrow(pred.c1)), col = "white", ylim = ylim3,
+     xaxt = "n", xlab = "Days from Beginning (December 31, 2019 is the first day) ", 
+     ylab = "Log value of No of COVID-19 Affected Cases in India",
+     main = "Regression Plot")
+axis(1, at = 1:nrow(pred.c1), labels = all_date)
+
+#shade 95%-level confidence region
+polygon(c(1:nrow(pred.c3),nrow(pred.c3):1), c(pred.c3[, 2], rev(pred.c3[, 3])),
+        col = "grey", border = NA)
+
+#plot fitted values / lines
+lines(1:nrow(pred.c3), pred.c3[, 1], lwd = 2, col = 4)
+
+#add 95%-level confidence bands
+lines(1:nrow(pred.c3), pred.c3[, 2], col = 2, lty = 2, lwd = 2)
+lines(1:nrow(pred.c3), pred.c3[, 3], col = 2, lty = 2, lwd = 2)
+
+#add original observations on the plot
+points(1:b, (India$LogCumInfection), pch = 20)
+
+#finally, we add legend
+legend(x = "topleft", legend = c("Obs", "Fitted", "95%-CI"),
+       pch = c(20, NA, NA, NA), lty = c(NA, 1, 2, 3), col = c(1, 4, 2, 3),
+       text.col = c(1, 4, 2, 3), bty = "n")
+
+#COMBINED PREDICTED MODEL
+ya = linearmod$coefficients[1]+(linearmod$coefficients[2]*x)
+yb = exp(linearmod1$coefficients[1])*((exp(linearmod1$coefficients[2]))^x)
+yc = exp(alpha[1]/(1 + exp(-(x - alpha[2])/alpha[3])))
+yd = exp(linearmod2$coefficients[1])*((exp(linearmod2$coefficients[2]))^x)
+summary <- data.frame(x,ya,yb,yc,yd)
+
+#plot the combined model
+ylim4 <- range(summary$yc)
+plot(1:nrow(summary), numeric(nrow(summary)), col = "white", ylim = ylim4,
+     xaxt = "n", xlab = "Days from Beginning (December 31, 2019 is the first day ) ", 
+     ylab = "No of COVID-19 Affected Cases in India",
+     main = "Summary Plot")
+axis(1, at = 1:nrow(pred.c), labels = all_date)
+
+#plot 4 different models
+lines(summary$x, summary$ya, lwd = 2, col = 1)
+lines(summary$x, summary$yb, lwd = 2, col = 2)
+lines(summary$x, summary$yc, lwd = 2, col = 3)
+lines(summary$x, summary$yd, lwd = 2, col = 4)
+
+#add original observations on the plot
+points(1:b, (India$CumInfection), pch = 20)
+
+#finally, we add legend
+legend(x = "topleft", legend = c("Obs", "Linear model (LM)", "Exponential Growth Model (EGM)",
+                                 "Non Linear model", "EGM with non zero observatioins"),
+       pch = c(20, NA, NA, NA, NA), lty = c(NA, 1, 1, 1, 1), col = c(1, 1, 2, 3, 4),
+       text.col = c(1, 1, 2, 3, 4), bty = "n")
+
+
